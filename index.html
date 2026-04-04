@@ -2132,14 +2132,25 @@ function applyCloudData(p) {
     gastos: p.gastos||[],
     sueldos: p.sueldos||{},
     presupuestos: p.presupuestos||{},
+    presupuestoGeneral: p.presupuestoGeneral||{},
     pareja: p.pareja||DATA.pareja,
     subcats: p.subcats||null,
     metas: p.metas||DATA.metas,
     gastosAhorros: p.gastosAhorros||[]
   };
+  // Override HIST with cloud data for months that have been manually edited
+  if(p.sueldos) {
+    Object.entries(p.sueldos).forEach(([mes, val]) => {
+      if(val && (val.sueldo !== undefined || val.ahorro !== undefined)) {
+        if(HIST[mes]) {
+          HIST[mes] = {...HIST[mes], ...val};
+        }
+      }
+    });
+  }
   if(p.months && p.months.length > 0) {
     MONTHS = p.months;
-    if(p.months.length > 0) selMes = p.months[p.months.length-1];
+    selMes = p.months[p.months.length-1];
   }
 }
 
@@ -2169,6 +2180,11 @@ function cloudLoad() {
     buildMonthScroll();
     renderKPIs(); renderCatBars(); renderChart(); renderAcumulado();
     if(document.getElementById('pg-ajustes')?.classList.contains('active')) renderAjustes();
+    // After cloud load, try to select current month if available
+    const nowN = new Date();
+    const namesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const currentMes = namesN[nowN.getMonth()] + ' ' + nowN.getFullYear();
+    if(MONTHS.includes(currentMes)) { selMes = currentMes; buildMonthScroll(); renderKPIs(); renderCatBars(); }
     showSync('ok');
   }).catch(() => showSync('error'));
 }
