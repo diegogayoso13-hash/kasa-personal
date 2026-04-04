@@ -11,84 +11,113 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js">
-function renderUserCode() {
-  const el = document.getElementById('user-code-display');
-  if(el) el.textContent = USER_ID;
-  const inp = document.getElementById('aj-user-code');
-  if(inp) inp.placeholder = USER_ID;
+/* ── TEMA OSCURO/CLARO ───────────────────────────────────────────────────── */
+function initTheme() {
+  const saved = localStorage.getItem('kasa_theme') || 'dark';
+  applyTheme(saved);
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle');
+  if(btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
+  localStorage.setItem('kasa_theme', theme);
+}
+function toggleTheme() {
+  const current = localStorage.getItem('kasa_theme') || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
 }
 
-function cambiarCodigo() {
-  const inp = document.getElementById('aj-user-code');
-  const val = inp?.value.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
-  if(!val) { toast('Escribí un código válido'); return; }
-  if(val === USER_ID) { toast('Es el mismo código'); return; }
-  USER_ID = val;
-  localStorage.setItem('kasa_user_id', val);
-  renderUserCode();
+/* ── RECORDATORIOS ───────────────────────────────────────────────────────── */
+function cerrarReminder() {
+  const el = document.getElementById('reminder-banner');
+  if(el) el.style.display = 'none';
+}
+function checkRecordatorios() {
+  const now = new Date();
+  const dia = now.getDate();
+  const mesActual = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][now.getMonth()]
+    + ' ' + now.getFullYear();
+  const banner = document.getElementById('reminder-banner');
+  const text = document.getElementById('reminder-text');
+  if(!banner || !text) return;
+  if(dia <= 7) {
+    const u = DATA.sueldos[mesActual];
+    if(!u && !HIST[mesActual] && MONTHS.includes(mesActual)) {
+      text.textContent = '¡Recordatorio! Todavía no cargaste el sueldo de ' + mesActual;
+      banner.style.display = 'block'; return;
+    }
+  }
+  const gastosRecientes = DATA.gastos.filter(g => {
+    if(!g.fecha) return false;
+    return (now - new Date(g.fecha)) / (1000*60*60*24) <= 10;
+  });
+  if(DATA.gastos.length > 0 && gastosRecientes.length === 0) {
+    text.textContent = 'Llevás más de 10 días sin registrar gastos. ¿Todo bien?';
+    banner.style.display = 'block'; return;
+  }
+  if(dia >= 25) {
+    const gastosMes = DATA.gastos.filter(g => g.mes === mesActual);
+    if(gastosMes.length === 0 && MONTHS.includes(mesActual)) {
+      text.textContent = 'Fin de mes cerca — ¿ya cargaste tus gastos de ' + mesActual + '?';
+      banner.style.display = 'block'; return;
+    }
+  }
+  banner.style.display = 'none';
+}
+
+/* ── EXPORTAR PDF ────────────────────────────────────────────────────────── */
+function exportarPDF() {
+  const d = getMesData(selMes);
+  const tasa = d.sueldo > 0 ? Math.round(d.ahorro / d.sueldo * 100) : 0;
+  const tasaColor = tasa >= 20 ? '#1fba87' : tasa >= 10 ? '#f0a500' : '#f04b4b';
+  const sorted = Object.entries(d.cats).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  const catRows = sorted.map(([cat, val]) => `<div class="pdf-row"><span>${cat}</span><span style="font-weight:600;font-family:monospace">${fmt(val)}</span></div>`).join('');
+  const last6 = MONTHS.slice(-6);
+  const monthRows = last6.map(m => {
+    const md = getMesData(m);
+    const t = md.sueldo > 0 ? Math.round(md.ahorro/md.sueldo*100) : 0;
+    return `<div class="pdf-row"><span>${m}</span><span style="color:#1fba87;font-family:monospace">${fmt(md.sueldo||0)}</span><span style="color:#f04b4b;font-family:monospace">${fmt(md.totalGastos)}</span><span>${t}%</span></div>`;
+  }).join('');
+  const fechaStr = new Date().toLocaleDateString('es-UY', {day:'2-digit',month:'long',year:'numeric'});
+  document.getElementById('pdf-content').innerHTML = `
+    <div class="pdf-header"><div class="pdf-title">kasa — Resumen financiero</div><div class="pdf-sub">${selMes} · ${fechaStr}</div></div>
+    <div class="pdf-kpi-grid">
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Ingresos</div><div class="pdf-kpi-val">${fmt(d.sueldo)}</div></div>
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Gastos</div><div class="pdf-kpi-val">${fmt(d.totalGastos)}</div></div>
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Ahorro</div><div class="pdf-kpi-val">${fmt(d.ahorro)}</div></div>
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Tasa ahorro</div><div class="pdf-kpi-val" style="color:${tasaColor}">${tasa}%</div><div class="pdf-tasa-bar" style="width:${Math.min(tasa,100)}%;background:${tasaColor}"></div></div>
+    </div>
+    <div class="pdf-section">Gastos por categoría — ${selMes}</div>
+    ${catRows || '<div class="pdf-row">Sin gastos cargados</div>'}
+    <div class="pdf-section" style="margin-top:20px">Últimos ${last6.length} meses</div>
+    <div class="pdf-row" style="font-weight:600;font-size:11px;color:#888;border-bottom:2px solid #ddd"><span>Mes</span><span>Ingresos</span><span>Gastos</span><span>Ahorro %</span></div>
+    ${monthRows}
+    <div class="pdf-footer">Generado con Kasa — Finanzas del hogar</div>`;
+  window.print();
+}
+
+
+/* ── PRESUPUESTO GENERAL ─────────────────────────────────────────────────── */
+function guardarPresupuestoGeneral() {
+  const mes = document.getElementById('p-mes')?.value;
+  if(!mes) return;
+  const val = Math.round(parseFloat(document.getElementById('p-general')?.value||'0'));
+  if(!DATA.presupuestoGeneral) DATA.presupuestoGeneral = {};
+  if(val > 0) {
+    DATA.presupuestoGeneral[mes] = val;
+  } else {
+    delete DATA.presupuestoGeneral[mes];
+  }
   save();
-  toast('Código actualizado ✓');
-}
-
-
-/* ── FILOSOFÍA SPLASH ────────────────────────────────────────────────────── */
-function renderSplashPasos() {
-  const el = document.getElementById('splash-pasos');
-  if(!el) return;
-  const pasos = [
-    {n:1, title:'Hacé las paces con el pasado', desc:'Calculá cuánto ganaste en tu vida hasta hoy.', tag:null},
-    {n:2, title:'Energía vital y dinero', desc:'Cada peso = tiempo de tu vida. Conocé tu tarifa real por hora.', tag:'Dashboard → tasa de ahorro'},
-    {n:3, title:'Registrá cada centavo', desc:'Sin juicio. Solo consciencia de en qué va tu dinero.', tag:'Cargar → gastos'},
-    {n:4, title:'¿Cuánto es suficiente?', desc:'Evaluá si cada gasto te da satisfacción real.', tag:'Dashboard → categorías'},
-    {n:5, title:'Visualizá tu progreso', desc:'Graficá ingresos, gastos y ahorro mes a mes.', tag:'Tendencias'},
-    {n:6, title:'Minimizá gastos', desc:'Reducí sin sacrificar calidad de vida.', tag:'Categorías → presupuesto'},
-    {n:7, title:'Maximizá ingresos', desc:'Alineados con tus valores.', tag:null},
-    {n:8, title:'La curva del capital', desc:'Seguí el crecimiento de tus ahorros e inversiones.', tag:'Metas'},
-    {n:9, title:'El punto de cruce', desc:'Cuando tus inversiones cubren tus gastos: libertad financiera.', tag:'Metas → objetivo'},
-  ];
-  el.innerHTML = pasos.map(p => `
-    <div style="display:flex;gap:10px;padding:9px 0;border-bottom:0.5px solid rgba(255,255,255,0.05)">
-      <div style="width:22px;height:22px;border-radius:50%;background:rgba(31,186,135,0.12);border:1px solid var(--teal);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:var(--teal);flex-shrink:0;margin-top:1px">${p.n}</div>
-      <div style="flex:1">
-        <div style="font-size:13px;font-weight:500;color:#e0e0e0">${p.title}</div>
-        <div style="font-size:11px;color:#555;margin-top:2px;line-height:1.4">${p.desc}</div>
-        ${p.tag ? `<div style="display:inline-block;background:rgba(31,186,135,0.1);color:var(--teal);border:0.5px solid rgba(31,186,135,0.4);font-size:9px;font-weight:600;padding:2px 7px;border-radius:8px;margin-top:4px">${p.tag}</div>` : ''}
-      </div>
-    </div>`).join('');
-}
-
-function abrirFilosofia() {
-  const panel = document.getElementById('filosofia-panel');
-  if(panel) { panel.style.display = 'block'; panel.scrollTop = 0; }
-  renderSplashPasos();
-}
-
-function cerrarFilosofia() {
-  const panel = document.getElementById('filosofia-panel');
-  if(panel) panel.style.display = 'none';
-}
-
-function cerrarFilosofiaNoMostrar() {
-  localStorage.setItem('kasa_hide_filosofia', '1');
-  cerrarFilosofia();
-  const card = document.getElementById('inspiracion-card');
-  if(card) card.style.display = 'none';
-}
-
-function initFilosofia() {
-  const hidden = localStorage.getItem('kasa_hide_filosofia');
-  const firstTime = !localStorage.getItem('kasa_filosofia_shown');
-  if(!hidden && firstTime) {
-    localStorage.setItem('kasa_filosofia_shown', '1');
-    setTimeout(abrirFilosofia, 1200);
-  }
-  if(hidden) {
-    const card = document.getElementById('inspiracion-card');
-    if(card) card.style.display = 'none';
-  }
+  renderPresupuestoInputs();
+  toast(val > 0 ? 'Presupuesto general guardado ✓' : 'Presupuesto eliminado');
 }
 
 </script>
+
+
+
 
 
 
@@ -116,16 +145,17 @@ function initFilosofia() {
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-html, body { height: 100%; position: relative; background: var(--bg); font-family: 'DM Sans', sans-serif; color: var(--text); }
+#nav, #nav * { font-size: 9px !important; -webkit-text-size-adjust: none; text-size-adjust: none; }
+html, body { height: 100%; position: relative; background: var(--bg); font-size: 9px; font-family: 'DM Sans', sans-serif; color: var(--text); }
 
 /* LAYOUT */
 #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
 #header { padding: 52px 20px 16px; background: var(--bg); border-bottom: 0.5px solid var(--border); flex-shrink: 0; }
 #content { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding: 16px 16px calc(80px + var(--safe-bottom)); }
-#nav { position: fixed; bottom: 0; left: 0; right: 0; height: calc(64px + var(--safe-bottom)); padding-bottom: var(--safe-bottom); background: var(--bg2); border-top: 0.5px solid var(--border); display: flex; z-index: 100; }
-.nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; background: none; border: none; color: var(--text3); font-family: 'DM Sans', sans-serif; font-size: 10px; cursor: pointer; transition: color .2s; }
+#nav { position: fixed; bottom: 0; left: 0; right: 0; height: calc(58px + var(--safe-bottom)); font-size: 9px !important; padding-bottom: var(--safe-bottom); background: var(--bg2); border-top: 0.5px solid var(--border); display: flex; z-index: 100; }
+.nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: none; border: none; color: var(--text3); font-size: 9px; font-family: 'DM Sans', sans-serif; font-size: 10px; cursor: pointer; transition: color .2s; }
 .nav-btn.active { color: var(--teal); }
-.nav-icon { font-size: 20px; line-height: 1; }
+.nav-icon { font-size: 18px; line-height: 1; }
 
 /* HEADER */
 .hdr-row { display: flex; justify-content: space-between; align-items: flex-start; }
@@ -152,7 +182,7 @@ html, body { height: 100%; position: relative; background: var(--bg); font-famil
 /* MONTH SCROLLER */
 .month-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: none; }
 .month-scroll::-webkit-scrollbar { display: none; }
-.month-pill { flex-shrink: 0; padding: 6px 14px; border-radius: 20px; border: 0.5px solid var(--border2); background: var(--bg2); color: var(--text2); font-size: 12px; font-family: 'DM Sans', sans-serif; cursor: pointer; white-space: nowrap; transition: all .2s; }
+.month-pill { flex-shrink: 0; padding: 6px 14px; border-radius: 20px; border: 0.5px solid var(--border2); background: var(--bg2); color: var(--text2); font-size: 12px; font-size: 9px; font-family: 'DM Sans', sans-serif; cursor: pointer; white-space: nowrap; transition: all .2s; }
 .month-pill.sel { background: var(--teal); border-color: var(--teal); color: #000; font-weight: 600; }
 
 /* FORM */
@@ -160,16 +190,16 @@ html, body { height: 100%; position: relative; background: var(--bg); font-famil
 .field label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 6px; }
 .field input, .field select {
   width: 100%; background: var(--bg3); border: 0.5px solid var(--border2); border-radius: var(--r-sm);
-  color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 15px; padding: 12px 14px;
+  color: var(--text); font-size: 9px; font-family: 'DM Sans', sans-serif; font-size: 15px; padding: 12px 14px;
   appearance: none; -webkit-appearance: none; outline: none;
 }
 .field input:focus, .field select:focus { border-color: var(--teal); }
 .field select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px; }
-.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.btn { width: 100%; padding: 14px; border-radius: var(--r-sm); border: none; font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; transition: opacity .2s; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .field input[type="number"] { min-width: 0; width: 100%; }
+.btn { width: 100%; padding: 14px; border-radius: var(--r-sm); border: none; font-size: 9px; font-family: 'DM Sans', sans-serif; font-size: 15px; font-weight: 600; cursor: pointer; transition: opacity .2s; }
 .btn:active { opacity: .75; }
 .btn-primary { background: var(--teal); color: #000; }
-.btn-danger-sm { background: none; border: 0.5px solid var(--border2); color: var(--red); border-radius: var(--r-sm); padding: 5px 10px; font-size: 12px; cursor: pointer; font-family: 'DM Sans', sans-serif; }
+.btn-danger-sm { background: none; border: 0.5px solid var(--border2); color: var(--red); border-radius: var(--r-sm); padding: 5px 10px; font-size: 12px; cursor: pointer; font-size: 9px; font-family: 'DM Sans', sans-serif; }
 
 /* BAR */
 .bar-row { margin-bottom: 12px; }
@@ -213,6 +243,43 @@ tr:last-child td { border: none; }
 .alert-body { flex: 1; }
 .alert-title { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
 .alert-msg { font-size: 12px; color: var(--text2); line-height: 1.5; }
+
+@media print {
+  body { background: #fff !important; color: #000 !important; }
+  #nav, #header, .btn, .btn-danger-sm, .month-scroll,
+  #inspiracion-card, #pareja-toggle, #filosofia-panel,
+  #onboarding, #edit-modal, #ga-edit-modal, #toast,
+  #reminder-banner { display: none !important; }
+  #app { height: auto !important; overflow: visible !important; }
+  #content { overflow: visible !important; padding: 0 !important; }
+  .page { display: none !important; }
+  .page.active { display: block !important; }
+  #pdf-report { display: block !important; }
+  .pdf-page { page-break-after: always; padding: 20px; }
+  .pdf-header { border-bottom: 2px solid #1fba87; padding-bottom: 12px; margin-bottom: 20px; }
+  .pdf-title { font-size: 24px; font-weight: 700; color: #000; }
+  .pdf-sub { font-size: 13px; color: #666; margin-top: 4px; }
+  .pdf-kpi-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+  .pdf-kpi { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+  .pdf-kpi-label { font-size: 11px; color: #888; margin-bottom: 4px; text-transform: uppercase; }
+  .pdf-kpi-val { font-size: 20px; font-weight: 700; color: #000; }
+  .pdf-section { font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 8px; }
+  .pdf-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  .pdf-tasa-bar { height: 6px; background: #1fba87; border-radius: 3px; margin-top: 4px; }
+  .pdf-footer { font-size: 10px; color: #aaa; text-align: center; margin-top: 20px; padding-top: 10px; border-top: 1px solid #eee; }
+}
+
+
+[data-theme="light"] {
+  --bg: #f5f5f5; --bg2: #ffffff; --bg3: #ebebeb; --bg4: #e0e0e0;
+  --border: rgba(0,0,0,0.08); --border2: rgba(0,0,0,0.14);
+  --text: #111111; --text2: #555555; --text3: #999999;
+  --teal: #0f9e70; --teal-dim: rgba(15,158,112,0.12);
+  --red: #d63031; --red-dim: rgba(214,48,49,0.1);
+  --amber: #d4850a; --amber-dim: rgba(212,133,10,0.1);
+  --blue: #2d6eb5; --blue-dim: rgba(45,110,181,0.1);
+}
+
 </style>
 </head>
 <body>
@@ -371,10 +438,22 @@ tr:last-child td { border: none; }
         <div class="hdr-sub" id="hdr-sub">Finanzas del hogar</div>
       </div>
       <div class="hdr-badge" id="hdr-badge">PRO</div>
+        <button id="theme-toggle" onclick="toggleTheme()" style="background:transparent;border:0.5px solid var(--border2);border-radius:50%;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;margin-left:8px" title="Cambiar tema">🌙</button>
     </div>
   </div>
 
-  <div id="content">
+  
+<div id="reminder-banner" style="display:none;background:rgba(240,165,0,0.12);border-bottom:0.5px solid rgba(240,165,0,0.3);padding:10px 16px;cursor:pointer" onclick="cerrarReminder()">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span style="font-size:18px">🔔</span>
+    <div style="flex:1">
+      <div id="reminder-text" style="font-size:13px;font-weight:500;color:#f0a500"></div>
+      <div style="font-size:11px;color:#664;margin-top:2px">Tocá para cerrar</div>
+    </div>
+  </div>
+</div>
+
+<div id="content">
 
     <!-- DASHBOARD -->
     <div id="pg-dashboard" class="page active">
@@ -388,6 +467,7 @@ tr:last-child td { border: none; }
         <div style="color:#664;font-size:16px">›</div>
       </div>
 
+      <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><button onclick="exportarPDF()" style="background:transparent;border:0.5px solid var(--border2);border-radius:var(--r-sm);color:var(--text2);font-size:12px;padding:7px 14px;cursor:pointer;display:flex;align-items:center;gap:6px"><span style="font-size:14px">📄</span> Exportar PDF</button></div>
       <div id="pareja-toggle" style="display:none;margin:0 0 12px;background:var(--bg2);border-radius:var(--r);padding:4px;display:flex;gap:4px">
         <button id="tog-solo" onclick="setVista('solo')" style="flex:1;padding:8px;border:none;border-radius:calc(var(--r) - 4px);font-size:13px;font-weight:600;cursor:pointer;background:var(--teal);color:#000">Solo yo</button>
         <button id="tog-pareja" onclick="setVista('pareja')" style="flex:1;padding:8px;border:none;border-radius:calc(var(--r) - 4px);font-size:13px;font-weight:600;cursor:pointer;background:transparent;color:var(--text2)">Hogar</button>
@@ -513,6 +593,34 @@ tr:last-child td { border: none; }
         <div class="card-title" style="color:var(--blue)">Presupuesto mensual</div>
         <div style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.5">Definí cuánto querés gastar por categoría este mes. Lo vas a ver comparado con el real en el Dashboard.</div>
         <div class="field"><label>Mes</label><select id="p-mes" onchange="renderPresupuestoInputs()"></select></div>
+
+        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:12px;border:0.5px solid var(--border2)">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Presupuesto general</div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+            <input type="number" id="p-general" inputmode="decimal" placeholder="Ej: 150000"
+              style="flex:1;background:var(--bg4);border:0.5px solid var(--border2);border-radius:var(--r-sm);color:var(--text);font-family:'DM Sans',sans-serif;font-size:15px;padding:10px 12px;outline:none">
+            <button class="btn" onclick="guardarPresupuestoGeneral()" style="padding:10px 16px;font-size:13px">Guardar</button>
+          </div>
+          <div id="p-general-resumen" style="display:none">
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
+              <span style="color:var(--text2)">Presupuesto</span>
+              <span id="p-gen-total" style="font-weight:600;font-family:'DM Mono',monospace;color:var(--text)"></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
+              <span style="color:var(--text2)">Gastado</span>
+              <span id="p-gen-gastado" style="font-weight:600;font-family:'DM Mono',monospace;color:var(--red)"></span>
+            </div>
+            <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;margin-bottom:6px">
+              <div id="p-gen-barra" style="height:100%;border-radius:3px;background:var(--teal);transition:width .4s"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:var(--text2)">Disponible</span>
+              <span id="p-gen-disponible" style="font-weight:700;font-family:'DM Mono',monospace"></span>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Por categoría</div>
         <div id="p-inputs" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px"></div>
         <button class="btn" style="background:var(--blue-dim);color:var(--blue);border:0.5px solid var(--blue);font-size:15px;font-weight:600;padding:14px" onclick="guardarPresupuesto()">Guardar presupuesto</button>
       </div>
@@ -597,7 +705,18 @@ tr:last-child td { border: none; }
 
   <!-- TENDENCIAS -->
   <div id="pg-tendencias" class="page">
-    <div class="card">
+        <div class="card" style="border-color:var(--teal)">
+      <div style="font-size:10px;font-weight:600;color:var(--teal);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px">Tu progreso — Energía vital</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+        <div><div style="font-size:10px;color:var(--text3);margin-bottom:3px">Tasa promedio</div><div id="tend-avg-tasa" style="font-size:20px;font-weight:700;color:var(--teal)">—</div></div>
+        <div><div style="font-size:10px;color:var(--text3);margin-bottom:3px">Mejor mes</div><div id="tend-best-mes" style="font-size:13px;font-weight:600;color:var(--text)">—</div><div id="tend-best-tasa" style="font-size:12px;color:var(--teal)">—</div></div>
+        <div><div style="font-size:10px;color:var(--text3);margin-bottom:3px">Ahorro total</div><div id="tend-total-aho" style="font-size:13px;font-weight:600;color:var(--text)">—</div></div>
+      </div>
+      <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;margin-bottom:6px"><div id="tend-progress-bar" style="height:100%;border-radius:3px;background:var(--teal);transition:width .5s"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>0%</span><span style="color:var(--teal)">Objetivo: 20%</span><span>50%+</span></div>
+      <div id="tend-mensaje" style="font-size:12px;color:var(--text2);margin-top:10px;font-style:italic;line-height:1.5;border-top:0.5px solid var(--border);padding-top:10px"></div>
+    </div>
+<div class="card">
       <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Tasa de ahorro por mes</div>
       <div style="display:flex;gap:14px;margin-bottom:10px;font-size:11px;color:var(--text2)">
         <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--teal);margin-right:4px"></span>Tasa</span>
@@ -698,22 +817,9 @@ tr:last-child td { border: none; }
         </div>
       </div>
 
-      <div class="card" style="background:linear-gradient(135deg,#1a1a0a,#1a150a);border-color:#f0a500">
-        <div style="width:32px;height:4px;background:#f0a500;border-radius:2px;margin-bottom:10px"></div>
-        <div style="font-size:15px;font-weight:600;color:#f0a500;line-height:1.3;margin-bottom:3px">La bolsa o la vida</div>
-        <div style="font-size:11px;color:#888;margin-bottom:10px">Vicki Robin &amp; Joe Dominguez</div>
-        <div style="font-size:12px;color:#aaa;line-height:1.6;margin-bottom:10px">Kasa está inspirada en los 9 pasos de este libro para transformar tu relación con el dinero y alcanzar la libertad financiera.</div>
-        <div style="border-left:2px solid #f0a500;padding-left:12px">
-          <div style="font-size:12px;color:#aaa;line-height:1.6;font-style:italic">El dinero es algo por lo que intercambiamos nuestra energía vital.</div>
-          <div style="font-size:10px;color:#555;margin-top:4px">— La bolsa o la vida</div>
-        </div>
-      </div>
+      
 
-      <div class="card">
-        <div class="card-title">Los 9 pasos en Kasa</div>
-        <div id="pasos-list">
-        </div>
-      </div>
+      
 
       <div class="card">
         <div class="card-title">Tu código personal</div>
@@ -745,7 +851,24 @@ tr:last-child td { border: none; }
 
 
   <!-- EDIT MODAL -->
-  <div id="edit-modal" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:200;align-items:flex-start;justify-content:center;padding-top:60px">
+  
+<div id="ga-edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:500;align-items:flex-end;justify-content:center">
+  <div style="background:var(--bg2);border-radius:20px 20px 0 0;padding:20px;width:100%;max-width:480px">
+    <div style="font-size:15px;font-weight:600;margin-bottom:16px;color:var(--text)">Editar gasto con ahorros</div>
+    <div class="field"><label>Descripción</label><input type="text" id="gae-desc"></div>
+    <div class="row2">
+      <div class="field"><label>Monto ($)</label><input type="number" id="gae-monto" inputmode="decimal"></div>
+      <div class="field"><label>Motivo</label><input type="text" id="gae-motivo"></div>
+    </div>
+    <div class="field"><label>Mes</label><select id="gae-mes"></select></div>
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn" onclick="cerrarGaEdit()" style="flex:1">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarGaEdit()" style="flex:1">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div id="edit-modal" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:200;align-items:flex-start;justify-content:center;padding-top:60px">
     <div style="background:var(--bg2);border:0.5px solid var(--border2);border-radius:var(--r);padding:20px;width:90%;max-width:380px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:14px;font-weight:500">Editar gasto</div>
@@ -798,6 +921,29 @@ tr:last-child td { border: none; }
 <div id="toast"></div>
 
 <script>
+/* ── FILOSOFÍA SPLASH ────────────────────────────────────────────────────── */
+
+
+
+
+
+
+
+
+
+
+
+/* ── EDITAR GASTOS CON AHORROS ───────────────────────────────────────────── */
+let editingGaId = null;
+
+
+
+
+
+
+
+
+
 /* ── SUBCATEGORÍAS EDITOR ────────────────────────────────────────────────── */
 
 
@@ -834,7 +980,7 @@ let editingId = null;
 
 
 /* ── PRESUPUESTO MENSUAL ─────────────────────────────────────────────────── */
-const CATS_LIST = ['Casa','Alimentación','Transporte','Salud','Indumentaria','Servicios','Ocio','Varios'];
+const CATS_LIST = ['Casa','Alimentación','Transporte','Salud','Indumentaria','Servicios','Ocio','Varios','Inversiones'];
 
 
 
@@ -907,7 +1053,7 @@ const HIST = {
 const CAT_COLOR = {
   Alimentacion:'#1fba87',Casa:'#4b9ef0',Transporte:'#f0a500',
   Servicios:'#a78bfa',Salud:'#f04b4b',Indumentaria:'#f472b6',
-  Actividades:'#34d399',Varios:'#9ca3af',Retiros:'#0ea5e9'
+  Actividades:'#34d399',Varios:'#9ca3af',Retiros:'#0ea5e9',Inversiones:'#7f77dd'
 };
 
 const SUBCATS = {
@@ -919,6 +1065,7 @@ const SUBCATS = {
   'Servicios':    ['Luz','Agua','Gas','Teléfonos','Suscripciones'],
   'Ocio':         ['Salidas','Fiestas','Actividades','Viajes'],
   'Varios':       ['Animales','Regalos','Otros'],
+  'Inversiones':  ['Acciones','Bonos','Cripto','Inmuebles','Fondos','Otros'],
 };
 
 function getSubcats() {
@@ -952,7 +1099,7 @@ const CAT_DIST = {
   Varios:.13, Salud:.06, Actividades:.05, Indumentaria:.02, Retiros:.02
 };
 
-let DATA = { gastos:[], sueldos:{}, presupuestos:{}, metas:[
+let DATA = { gastos:[], sueldos:{}, presupuestos:{}, presupuestoGeneral:{}, metas:[
   {nombre:'Fondo emergencia (3 meses)', objetivo:400000},
   {nombre:'Vacaciones', objetivo:200000},
   {nombre:'Meta $1.000.000', objetivo:1000000},
@@ -1055,7 +1202,7 @@ function navTo(pg, btn) {
   if(pg==='dashboard') { buildMonthScroll(); renderKPIs(); renderCatBars(); renderChart(); renderAcumulado(); initParejaUI(); if(typeof vistaActual!=='undefined'&&vistaActual==='pareja') renderHogar(); }
   if(pg==='historial') renderHistorial();
   if(pg==='metas') renderMetas();
-  if(pg==='ajustes') renderAjustes();
+  if(pg==='ajustes') { setTimeout(renderAjustes, 50); }
   if(pg==='tendencias') renderTendencias();
   if(pg==='categorias') { initCatMesSel(); renderCatAnalisis(); }
 }
@@ -1168,10 +1315,16 @@ function renderAcumulado() {
   if(!ultimos.length) { lista.innerHTML=''; return; }
   lista.innerHTML = '<div style="border-top:0.5px solid var(--border);padding-top:10px;margin-top:4px">'
     + '<div style="font-size:11px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Últimos gastos con ahorros</div>'
-    + ultimos.map(g=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:0.5px solid var(--border)">
-        <div><div style="font-size:13px;font-weight:500">${g.desc}</div>
-        <div style="font-size:11px;color:var(--text2)">${g.motivo} · ${g.mes}</div></div>
-        <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--red);font-weight:500">${fmt(g.monto)}</div>
+    + ultimos.map(g=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:0.5px solid var(--border)">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:500">${g.desc}</div>
+          <div style="font-size:11px;color:var(--text2)">${g.motivo} · ${g.mes}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--red);font-weight:500">${fmt(g.monto)}</div>
+          <button class="btn-danger-sm" style="color:var(--blue);border-color:var(--border2)" onclick="editarGastoAhorro(${g.id})">✏</button>
+          <button class="btn-danger-sm" onclick="borrarGastoAhorro(${g.id})">✕</button>
+        </div>
       </div>`).join('') + '</div>';
 }
 
@@ -1343,7 +1496,6 @@ function borrarMeta(i) {
 function renderAjustes() {
   if(typeof renderAjustesParejaUI === "function") renderAjustesParejaUI();
   initSubcatEditor();
-  renderPasos();
   renderUserCode();
   // Meses list
   const gastosPorMes = {};
@@ -1445,9 +1597,11 @@ renderCatBars();
 renderChart();
 renderAcumulado();
 setTimeout(cloudLoad, 800);
+initTheme();
 obInit();
 setTimeout(cloudLoad, 1000);
 setTimeout(initParejaUI, 100);
+setTimeout(checkRecordatorios, 1500);
 setTimeout(initFilosofia, 500);
 
 
@@ -1513,7 +1667,29 @@ function guardarEdicion() {
 function renderPresupuestoInputs() {
   const mes = document.getElementById('p-mes')?.value;
   if(!mes) return;
-  const pres = DATA.presupuestos[mes] || {};
+  const pres = (DATA.presupuestos||{})[mes] || {};
+
+  // Render general budget
+  const genVal = (DATA.presupuestoGeneral||{})[mes] || 0;
+  const genInput = document.getElementById('p-general');
+  if(genInput) genInput.value = genVal || '';
+
+  const gastosMes = DATA.gastos.filter(g=>g.mes===mes).reduce((a,g)=>a+g.monto,0);
+  const resumen = document.getElementById('p-general-resumen');
+  if(resumen && genVal > 0) {
+    resumen.style.display = 'block';
+    const pct = Math.min(gastosMes/genVal*100, 100);
+    const disp = genVal - gastosMes;
+    const fmt2 = v => '$' + Math.abs(Math.round(v)).toLocaleString('es-UY');
+    document.getElementById('p-gen-total').textContent = fmt2(genVal);
+    document.getElementById('p-gen-gastado').textContent = fmt2(gastosMes);
+    document.getElementById('p-gen-disponible').textContent = fmt2(disp);
+    document.getElementById('p-gen-disponible').style.color = disp >= 0 ? 'var(--teal)' : 'var(--red)';
+    const barra = document.getElementById('p-gen-barra');
+    if(barra) { barra.style.width = pct+'%'; barra.style.background = pct>=90?'var(--red)':pct>=70?'var(--amber)':'var(--teal)'; }
+  } else if(resumen) {
+    resumen.style.display = 'none';
+  }
   document.getElementById('p-inputs').innerHTML = CATS_LIST.map(cat=>`
     <div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:4px">${cat}</div>
@@ -1613,6 +1789,26 @@ function renderHistorial() {
 
 
 function renderTendencias() {
+
+  const ingArr2 = MONTHS.map(m=>{const u=DATA.sueldos[m];return u?.sueldo??HIST[m]?.sueldo??0;});
+  const ahoArr2 = MONTHS.map(m=>{const u=DATA.sueldos[m];return u?.ahorro??HIST[m]?.ahorro??0;});
+  const tasaArr2 = MONTHS.map((m,i)=>ingArr2[i]>0?Math.round(ahoArr2[i]/ingArr2[i]*1000)/10:0);
+  const validT = tasaArr2.filter(t=>t>0);
+  const avgT = validT.length ? Math.round(validT.reduce((a,b)=>a+b,0)/validT.length*10)/10 : 0;
+  const totalA = ahoArr2.reduce((a,b)=>a+b,0);
+  const bestI = tasaArr2.indexOf(Math.max(...tasaArr2));
+  const setEl = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+  const setStyle = (id,s,v) => { const el=document.getElementById(id); if(el) el.style[s]=v; };
+  setEl('tend-avg-tasa', avgT+'%');
+  setStyle('tend-avg-tasa','color',avgT>=20?'var(--teal)':avgT>=10?'var(--amber)':'var(--red)');
+  setEl('tend-best-mes', MONTHS[bestI]||'—');
+  setEl('tend-best-tasa', Math.max(...tasaArr2).toFixed(1)+'%');
+  setEl('tend-total-aho', fmt(totalA));
+  const barEl=document.getElementById('tend-progress-bar');
+  if(barEl){barEl.style.width=Math.min(avgT/50*100,100)+'%';barEl.style.background=avgT>=20?'var(--teal)':avgT>=10?'var(--amber)':'var(--red)';}
+  const msgs = {e:'"Estás en camino a la libertad financiera. Tu energía vital trabaja para vos."',b:'"Vas bien. Cada punto extra de tasa de ahorro te acerca al punto de cruce."',i:'"Cada peso ahorrado es tiempo de vida recuperado. Seguí registrando."'};
+  setEl('tend-mensaje', msgs[avgT>=20?'e':avgT>=10?'b':'i']);
+
   const MONTHS_SHORT = MONTHS.map(m=>m.split(' ')[0].substring(0,3));
   const ing  = MONTHS.map(m=>{const u=DATA.sueldos[m];return u?.sueldo??HIST[m]?.sueldo??0;});
   const gas  = MONTHS.map(m=>{const d=getMesData(m);return d.totalGastos;});
@@ -1972,6 +2168,7 @@ function cloudLoad() {
     if(typeof populateSelectsExtra==='function') populateSelectsExtra();
     buildMonthScroll();
     renderKPIs(); renderCatBars(); renderChart(); renderAcumulado();
+    if(document.getElementById('pg-ajustes')?.classList.contains('active')) renderAjustes();
     showSync('ok');
   }).catch(() => showSync('error'));
 }
@@ -2079,7 +2276,7 @@ function agregarMesYCerrar() {
 
 
 function renderPasos() {
-  const el = document.getElementById('pasos-list');
+  const el = document.getElementById('pasos-list') || document.getElementById('splash-pasos');
   if(!el) return;
   const pasos = [
     {n:1, title:'Hacé las paces con el pasado', desc:'Calculá cuánto ganaste en tu vida y cuánto tenés hoy.', tag:null},
@@ -2183,8 +2380,158 @@ function initFilosofia() {
   }
 }
 
+
+/* ── EDITAR GASTOS CON AHORROS ───────────────────────────────────────────── */
+
+
+function editarGastoAhorro(id) {
+  const g = (DATA.gastosAhorros||[]).find(x=>x.id===id);
+  if(!g) return;
+  editingGaId = id;
+  document.getElementById('gae-desc').value = g.desc||'';
+  document.getElementById('gae-monto').value = g.monto||0;
+  document.getElementById('gae-motivo').value = g.motivo||'';
+  const sel = document.getElementById('gae-mes');
+  const rev = [...MONTHS].reverse();
+  sel.innerHTML = rev.map(m=>`<option value="${m}">${m}</option>`).join('');
+  sel.value = g.mes||selMes;
+  const modal = document.getElementById('ga-edit-modal');
+  if(modal) modal.style.display = 'flex';
+}
+
+function cerrarGaEdit() {
+  const modal = document.getElementById('ga-edit-modal');
+  if(modal) modal.style.display = 'none';
+  editingGaId = null;
+}
+
+function guardarGaEdit() {
+  const idx = (DATA.gastosAhorros||[]).findIndex(x=>x.id===editingGaId);
+  if(idx===-1) return;
+  DATA.gastosAhorros[idx] = {
+    ...DATA.gastosAhorros[idx],
+    desc: document.getElementById('gae-desc').value.trim(),
+    monto: Math.round(parseFloat(document.getElementById('gae-monto').value)||0),
+    motivo: document.getElementById('gae-motivo').value.trim(),
+    mes: document.getElementById('gae-mes').value,
+  };
+  save(); cerrarGaEdit(); renderAcumulado(); toast('Gasto actualizado ✓');
+}
+
+function borrarGastoAhorro(id) {
+  DATA.gastosAhorros = (DATA.gastosAhorros||[]).filter(x=>x.id!==id);
+  save(); renderAcumulado(); toast('Gasto eliminado');
+}
+
+/* ── TEMA OSCURO/CLARO ───────────────────────────────────────────────────── */
+function initTheme() {
+  const saved = localStorage.getItem('kasa_theme') || 'dark';
+  applyTheme(saved);
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle');
+  if(btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
+  localStorage.setItem('kasa_theme', theme);
+}
+function toggleTheme() {
+  const current = localStorage.getItem('kasa_theme') || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+/* ── RECORDATORIOS ───────────────────────────────────────────────────────── */
+function cerrarReminder() {
+  const el = document.getElementById('reminder-banner');
+  if(el) el.style.display = 'none';
+}
+function checkRecordatorios() {
+  const now = new Date();
+  const dia = now.getDate();
+  const mesActual = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][now.getMonth()]
+    + ' ' + now.getFullYear();
+  const banner = document.getElementById('reminder-banner');
+  const text = document.getElementById('reminder-text');
+  if(!banner || !text) return;
+  if(dia <= 7) {
+    const u = DATA.sueldos[mesActual];
+    if(!u && !HIST[mesActual] && MONTHS.includes(mesActual)) {
+      text.textContent = '¡Recordatorio! Todavía no cargaste el sueldo de ' + mesActual;
+      banner.style.display = 'block'; return;
+    }
+  }
+  const gastosRecientes = DATA.gastos.filter(g => {
+    if(!g.fecha) return false;
+    return (now - new Date(g.fecha)) / (1000*60*60*24) <= 10;
+  });
+  if(DATA.gastos.length > 0 && gastosRecientes.length === 0) {
+    text.textContent = 'Llevás más de 10 días sin registrar gastos. ¿Todo bien?';
+    banner.style.display = 'block'; return;
+  }
+  if(dia >= 25) {
+    const gastosMes = DATA.gastos.filter(g => g.mes === mesActual);
+    if(gastosMes.length === 0 && MONTHS.includes(mesActual)) {
+      text.textContent = 'Fin de mes cerca — ¿ya cargaste tus gastos de ' + mesActual + '?';
+      banner.style.display = 'block'; return;
+    }
+  }
+  banner.style.display = 'none';
+}
+
+/* ── EXPORTAR PDF ────────────────────────────────────────────────────────── */
+function exportarPDF() {
+  const d = getMesData(selMes);
+  const tasa = d.sueldo > 0 ? Math.round(d.ahorro / d.sueldo * 100) : 0;
+  const tasaColor = tasa >= 20 ? '#1fba87' : tasa >= 10 ? '#f0a500' : '#f04b4b';
+  const sorted = Object.entries(d.cats).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  const catRows = sorted.map(([cat, val]) => `<div class="pdf-row"><span>${cat}</span><span style="font-weight:600;font-family:monospace">${fmt(val)}</span></div>`).join('');
+  const last6 = MONTHS.slice(-6);
+  const monthRows = last6.map(m => {
+    const md = getMesData(m);
+    const t = md.sueldo > 0 ? Math.round(md.ahorro/md.sueldo*100) : 0;
+    return `<div class="pdf-row"><span>${m}</span><span style="color:#1fba87;font-family:monospace">${fmt(md.sueldo||0)}</span><span style="color:#f04b4b;font-family:monospace">${fmt(md.totalGastos)}</span><span>${t}%</span></div>`;
+  }).join('');
+  const fechaStr = new Date().toLocaleDateString('es-UY', {day:'2-digit',month:'long',year:'numeric'});
+  document.getElementById('pdf-content').innerHTML = `
+    <div class="pdf-header"><div class="pdf-title">kasa — Resumen financiero</div><div class="pdf-sub">${selMes} · ${fechaStr}</div></div>
+    <div class="pdf-kpi-grid">
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Ingresos</div><div class="pdf-kpi-val">${fmt(d.sueldo)}</div></div>
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Gastos</div><div class="pdf-kpi-val">${fmt(d.totalGastos)}</div></div>
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Ahorro</div><div class="pdf-kpi-val">${fmt(d.ahorro)}</div></div>
+      <div class="pdf-kpi"><div class="pdf-kpi-label">Tasa ahorro</div><div class="pdf-kpi-val" style="color:${tasaColor}">${tasa}%</div><div class="pdf-tasa-bar" style="width:${Math.min(tasa,100)}%;background:${tasaColor}"></div></div>
+    </div>
+    <div class="pdf-section">Gastos por categoría — ${selMes}</div>
+    ${catRows || '<div class="pdf-row">Sin gastos cargados</div>'}
+    <div class="pdf-section" style="margin-top:20px">Últimos ${last6.length} meses</div>
+    <div class="pdf-row" style="font-weight:600;font-size:11px;color:#888;border-bottom:2px solid #ddd"><span>Mes</span><span>Ingresos</span><span>Gastos</span><span>Ahorro %</span></div>
+    ${monthRows}
+    <div class="pdf-footer">Generado con Kasa — Finanzas del hogar</div>`;
+  window.print();
+}
+
+
+/* ── PRESUPUESTO GENERAL ─────────────────────────────────────────────────── */
+function guardarPresupuestoGeneral() {
+  const mes = document.getElementById('p-mes')?.value;
+  if(!mes) return;
+  const val = Math.round(parseFloat(document.getElementById('p-general')?.value||'0'));
+  if(!DATA.presupuestoGeneral) DATA.presupuestoGeneral = {};
+  if(val > 0) {
+    DATA.presupuestoGeneral[mes] = val;
+  } else {
+    delete DATA.presupuestoGeneral[mes];
+  }
+  save();
+  renderPresupuestoInputs();
+  toast(val > 0 ? 'Presupuesto general guardado ✓' : 'Presupuesto eliminado');
+}
+
 </script>
 
 
+
+
+
+<div id="pdf-report" style="display:none"><div class="pdf-page" id="pdf-content"></div></div>
 </body>
 </html>
